@@ -22,7 +22,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PORT = process.env.PORT;
+const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "dev_secret";
 const SALT_ROUNDS = 10;
 
@@ -270,7 +270,7 @@ app.post("/upload", upload.single("image"), (req, res) => {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
-    const fileUrl = `http://localhost:${PORT}/uploads/${req.file.filename}`;
+    const fileUrl = `${req.protocol}://${req.get("host")}/uploads/${req.file.filename}`;
     res.json({ url: fileUrl });
   } catch (err) {
     console.error("POST /upload ERROR:", err);
@@ -435,5 +435,5 @@ app.get("/home", async (req, res) => {
 // START SERVER
 // ============================
 app.listen(PORT, () =>
-  console.log(`🚀 Server chạy tại: http://localhost:${PORT}`)
+  console.log(`🚀 Server chạy tại PORT: ${PORT}`)
 );
