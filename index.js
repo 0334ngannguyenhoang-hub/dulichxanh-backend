@@ -7,11 +7,25 @@ import cors from "cors";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
 import { fileURLToPath } from "url";
+import path from "path";
 
-// Fix __dirname for ESM
+// Cloudinary
+import { v2 as cloudinary } from "cloudinary";
+import { CloudinaryStorage } from "multer-storage-cloudinary";
+
+// ============================
+// CLOUDINARY CONFIG
+// ============================
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// ============================
+// ESM __dirname FIX
+// ============================
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -32,10 +46,10 @@ const SALT_ROUNDS = 10;
 mongoose
   .connect(process.env.MONGO_URL)
   .then(() => console.log("🌿 MongoDB connected"))
-  .catch((err) => console.log("❌ MongoDB ERROR:", err));
+  .catch(err => console.log("❌ MongoDB ERROR:", err));
 
 // ============================
-// USER SCHEMA & MODEL
+// USER MODEL
 // ============================
 const UserSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
@@ -47,7 +61,7 @@ const UserSchema = new mongoose.Schema({
 const User = mongoose.model("User", UserSchema);
 
 // ============================
-// POST SCHEMA & MODEL
+// POST MODEL
 // ============================
 const PostSchema = new mongoose.Schema({
   title: String,
@@ -58,9 +72,8 @@ const PostSchema = new mongoose.Schema({
   tags: String,
   content: String,
 
-  // E-magazine page (Canva Website URL)
-  type: { type: String, default: "normal" }, // "normal" hoặc "emagazine"
-  emagPage: String, // ví dụ: https://yourname.my.canva.site/xxx
+  type: { type: String, default: "normal" },
+  emagPage: String,
 
   category: [String],
   status: { type: String, default: "draft" },
@@ -73,26 +86,25 @@ const Post = mongoose.model("Post", PostSchema);
 // AUTH MIDDLEWARE
 // ============================
 function requireAuth(req, res, next) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return res.status(401).json({ error: "Missing Authorization header" });
+  const auth = req.headers.authorization;
+  if (!auth) return res.status(401).json({ error: "Missing Authorization header" });
 
-  const token = authHeader.split(" ")[1];
+  const token = auth.split(" ")[1];
   if (!token) return res.status(401).json({ error: "Invalid Authorization header" });
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload;
+    req.user = jwt.verify(token, JWT_SECRET);
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ error: "Invalid or expired token" });
   }
 }
 
-function requireRole(...allowedRoles) {
+function requireRole(...roles) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ error: "Not authenticated" });
-    if (allowedRoles.includes(req.user.role)) return next();
-    return res.status(403).json({ error: "Forbidden" });
+    if (!roles.includes(req.user.role)) return res.status(403).json({ error: "Forbidden" });
+    next();
   };
 }
 
@@ -105,26 +117,17 @@ app.post("/auth/register", async (req, res) => {
     if (!username || !password)
       return res.status(400).json({ error: "username & password required" });
 
-    const existing = await User.findOne({ username });
-    if (existing)
+    if (await User.findOne({ username }))
       return res.status(400).json({ error: "username already exists" });
 
     const hash = await bcrypt.hash(password, SALT_ROUNDS);
     const user = new User({ username, passwordHash: hash });
     await user.save();
 
-    const token = jwt.sign(
-      {
-        id: user._id.toString(),
-        username: user.username,
-        role: user.role
-      },
-      JWT_SECRET
-    );
-
+    const token = jwt.sign({ id: user._id, username, role: user.role }, JWT_SECRET);
     res.json({ message: "User created", user, token });
   } catch (err) {
-    console.error("POST /auth/register ERROR:", err);
+    console.error("REGISTER ERROR:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -139,17 +142,13 @@ app.post("/auth/login", async (req, res) => {
     if (!match) return res.status(400).json({ error: "Wrong password" });
 
     const token = jwt.sign(
-      {
-        id: user._id.toString(),
-        username: user.username,
-        role: user.role
-      },
+      { id: user._id, username: user.username, role: user.role },
       JWT_SECRET
     );
 
     res.json({ message: "Login success", user, token });
   } catch (err) {
-    console.error("POST /auth/login ERROR:", err);
+    console.error("LOGIN ERROR:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -159,8 +158,7 @@ app.post("/auth/login", async (req, res) => {
 // ============================
 app.get("/posts", requireAuth, async (req, res) => {
   try {
-    const status = req.query.status;
-    const q = status ? { status } : {};
+    const q = req.query.status ? { status: req.query.status } : {};
     const posts = await Post.find(q).sort({ createdAt: -1 });
     res.json(posts);
   } catch (err) {
@@ -171,10 +169,8 @@ app.get("/posts", requireAuth, async (req, res) => {
 
 app.post("/posts", requireAuth, async (req, res) => {
   try {
-    const data = req.body;
-    data.authorId = req.user.id;
-    const newPost = new Post(data);
-    await newPost.save();
+    const data = { ...req.body, authorId: req.user.id };
+    const newPost = await Post.create(data);
     res.json({ message: "Created", newPost });
   } catch (err) {
     console.error("POST /posts ERROR:", err);
@@ -186,8 +182,7 @@ app.put("/posts/:id", requireAuth, async (req, res) => {
   try {
     const updated = await Post.findByIdAndUpdate(req.params.id, req.body, { new: true });
     res.json(updated);
-  } catch (err) {
-    console.error("PUT /posts/:id ERROR:", err);
+  } catch {
     res.status(500).json({ error: "Server error" });
   }
 });
@@ -196,239 +191,151 @@ app.delete("/posts/:id", requireAuth, async (req, res) => {
   try {
     await Post.findByIdAndDelete(req.params.id);
     res.json({ message: "Deleted" });
-  } catch (err) {
-    console.error("DELETE /posts/:id ERROR:", err);
+  } catch {
     res.status(500).json({ error: "Server error" });
   }
 });
 
 app.patch("/posts/:id/publish", requireAuth, async (req, res) => {
-  try {
-    const updated = await Post.findByIdAndUpdate(
-      req.params.id,
-      { status: "published" },
-      { new: true }
-    );
-    res.json(updated);
-  } catch (err) {
-    console.error("PATCH publish ERROR:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+  const updated = await Post.findByIdAndUpdate(req.params.id, { status: "published" }, { new: true });
+  res.json(updated);
 });
 
 app.patch("/posts/:id/unpublish", requireAuth, async (req, res) => {
-  try {
-    const updated = await Post.findByIdAndUpdate(
-      req.params.id,
-      { status: "draft" },
-      { new: true }
-    );
-    res.json(updated);
-  } catch (err) {
-    console.error("PATCH unpublish ERROR:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+  const updated = await Post.findByIdAndUpdate(req.params.id, { status: "draft" }, { new: true });
+  res.json(updated);
 });
 
-// GET post by id (admin)
 app.get("/posts/:id", requireAuth, async (req, res) => {
-  try {
-    const post = await Post.findById(req.params.id);
-    if (!post) return res.status(404).json({ error: "Post not found" });
-    res.json(post);
-  } catch (err) {
-    console.error("GET /posts/:id ERROR:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+  const post = await Post.findById(req.params.id);
+  if (!post) return res.status(404).json({ error: "Post not found" });
+  res.json(post);
 });
 
 // ============================
-// UPLOAD API
+// CLOUDINARY UPLOAD
 // ============================
-
-// Tạo thư mục uploads nếu chưa có
-const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-// Serve static files
-app.use("/uploads", express.static(uploadDir));
-
-// Multer config
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname)),
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: "dulichxanh",
+    allowed_formats: ["jpg", "jpeg", "png", "webp"]
+  }
 });
 
 const upload = multer({ storage });
 
-// Upload route
 app.post("/upload", upload.single("image"), (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
+    if (!req.file || !req.file.path) {
+      return res.status(400).json({ error: "Upload failed" });
     }
-
-    const fileUrl = `https://dulichxanh-backend.onrender.com/uploads/${req.file.filename}`;
-    res.json({ url: fileUrl });
+    res.json({ url: req.file.path });
   } catch (err) {
-    console.error("POST /upload ERROR:", err);
+    console.error("UPLOAD ERROR:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
 
 // ============================
-// PUBLIC API (NO AUTH) — for website readers
+// PUBLIC API
 // ============================
-
-// 1️⃣ GET all published posts
 app.get("/public/posts", async (req, res) => {
-  try {
-    const posts = await Post.find({ status: "published" })
-      .sort({ createdAt: -1 });
-    res.json(posts);
-  } catch (err) {
-    console.error("GET /public/posts ERROR:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+  const posts = await Post.find({ status: "published" }).sort({ createdAt: -1 });
+  res.json(posts);
 });
 
-// 2️⃣ GET single post (public) — safe (checks ObjectId)
 app.get("/public/posts/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: "Invalid post id" });
-    }
+  const id = req.params.id;
+  if (!mongoose.Types.ObjectId.isValid(id))
+    return res.status(400).json({ error: "Invalid id" });
 
-    const post = await Post.findById(id);
-    if (!post || post.status !== "published") {
-      return res.status(404).json({ error: "Post not found" });
-    }
-    res.json(post);
-  } catch (err) {
-    console.error("GET /public/posts/:id ERROR:", err);
-    res.status(500).json({ error: "Server error", detail: err.message });
-  }
+  const post = await Post.findById(id);
+  if (!post || post.status !== "published")
+    return res.status(404).json({ error: "Post not found" });
+
+  res.json(post);
 });
 
-// 3️⃣ GET posts by category slug (child categories)
 app.get("/public/category/:slug", async (req, res) => {
-  try {
-    const slug = req.params.slug;
-
-    const posts = await Post.find({
-      status: "published",
-      category: { $in: [slug] }
-    }).sort({ createdAt: -1 });
-
-    res.json(posts);
-
-  } catch (err) {
-    console.error("GET /public/category/:slug ERROR:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+  const posts = await Post.find({
+    status: "published",
+    category: { $in: [req.params.slug] }
+  }).sort({ createdAt: -1 });
+  res.json(posts);
 });
 
-// 4️⃣ SEARCH posts (title + sapo + tags)
 app.get("/public/search", async (req, res) => {
-  try {
-    const q = req.query.q || "";
-
-    const posts = await Post.find({
-      status: "published",
-      $or: [
-        { title: { $regex: q, $options: "i" } },
-        { sapo: { $regex: q, $options: "i" } },
-        { tags: { $regex: q, $options: "i" } }
-      ]
-    });
-
-    res.json(posts);
-
-  } catch (err) {
-    console.error("GET /public/search ERROR:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+  const q = req.query.q || "";
+  const posts = await Post.find({
+    status: "published",
+    $or: [
+      { title: { $regex: q, $options: "i" } },
+      { sapo: { $regex: q, $options: "i" } },
+      { tags: { $regex: q, $options: "i" } }
+    ]
+  });
+  res.json(posts);
 });
 
 // ============================
-// HOME API (Tiêu điểm + 5 chuyên mục lớn)
+// HOME API
 // ============================
-
 app.get("/home", async (req, res) => {
-  try {
-    // Lấy tất cả bài đã xuất bản và sort mới nhất → cũ nhất
-    const all = await Post.find({ status: "published" })
-      .sort({ createdAt: -1 });
+  const all = await Post.find({ status: "published" }).sort({ createdAt: -1 });
 
-    if (all.length === 0)
-      return res.json({
-        highlight: null,
-        recent: [],
-        tintuc: [],
-        trainghiem: [],
-        guongmat: [],
-        gochocthuat: [],
-        multimedia: []
-      });
-
-    // -----------------------------
-    // 1️⃣ TIÊU ĐIỂM — Không theo chuyên mục
-    // -----------------------------
-    const highlight = all[0];        // Bài mới nhất
-    const recent = all.slice(1, 3);  // 2 bài tiếp theo
-
-    // -----------------------------
-    // 2️⃣ NHÓM THEO CHUYÊN MỤC LỚN
-    // -----------------------------
-    const groups = {
+  if (all.length === 0)
+    return res.json({
+      highlight: null,
+      recent: [],
       tintuc: [],
       trainghiem: [],
       guongmat: [],
       gochocthuat: [],
       multimedia: []
-    };
-
-    all.forEach(post => {
-      if (!Array.isArray(post.category)) return;
-
-      post.category.forEach(cat => {
-        if (["tin-trong-nuoc", "tin-the-gioi"].includes(cat))
-          groups.tintuc.push(post);
-
-        if (["am-thuc", "diem-den", "ba-lo-du-lich", "di-chuyen-xanh"].includes(cat))
-          groups.trainghiem.push(post);
-
-        if (["nguoi-dan-xanh", "su-gia-van-hoa", "doanh-nghiep-xanh"].includes(cat))
-          groups.guongmat.push(post);
-
-        if (["cong-nghe-xanh", "tri-thuc-ben-vung", "du-lieu-chinh-sach"].includes(cat))
-          groups.gochocthuat.push(post);
-
-        if (["anh", "video", "infographic", "emagazine"].includes(cat))
-          groups.multimedia.push(post);
-      });
     });
 
-    // -----------------------------
-    // 3️⃣ TRẢ DỮ LIỆU VỀ CHO FRONTEND
-    // -----------------------------
-    res.json({
-      highlight: highlight,
-      recent: recent,
-      tintuc: groups.tintuc.slice(0, 4),
-      trainghiem: groups.trainghiem.slice(0, 4),
-      guongmat: groups.guongmat.slice(0, 4),
-      gochocthuat: groups.gochocthuat.slice(0, 4),
-      multimedia: groups.multimedia.slice(0, 4)
-    });
+  const highlight = all[0];
+  const recent = all.slice(1, 3);
 
-  } catch (err) {
-    console.error("GET /home ERROR:", err);
-    res.status(500).json({ error: "Server error" });
-  }
+  const groups = {
+    tintuc: [],
+    trainghiem: [],
+    guongmat: [],
+    gochocthuat: [],
+    multimedia: []
+  };
+
+  all.forEach(post => {
+    if (!Array.isArray(post.category)) return;
+
+    post.category.forEach(cat => {
+      if (["tin-trong-nuoc", "tin-the-gioi"].includes(cat))
+        groups.tintuc.push(post);
+
+      if (["am-thuc", "diem-den", "ba-lo-du-lich", "di-chuyen-xanh"].includes(cat))
+        groups.trainghiem.push(post);
+
+      if (["nguoi-dan-xanh", "su-gia-van-hoa", "doanh-nghiep-xanh"].includes(cat))
+        groups.guongmat.push(post);
+
+      if (["cong-nghe-xanh", "tri-thuc-ben-vung", "du-lieu-chinh-sach"].includes(cat))
+        groups.gochocthuat.push(post);
+
+      if (["anh", "video", "infographic", "emagazine"].includes(cat))
+        groups.multimedia.push(post);
+    });
+  });
+
+  res.json({
+    highlight,
+    recent,
+    tintuc: groups.tintuc.slice(0, 4),
+    trainghiem: groups.trainghiem.slice(0, 4),
+    guongmat: groups.guongmat.slice(0, 4),
+    gochocthuat: groups.gochocthuat.slice(0, 4),
+    multimedia: groups.multimedia.slice(0, 4)
+  });
 });
 
 // ============================
