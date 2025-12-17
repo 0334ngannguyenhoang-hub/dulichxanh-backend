@@ -67,13 +67,17 @@ const PostSchema = new mongoose.Schema({
   author: String,
   authorId: String,
   thumbnail: String,
-  tags: String,
+  tags: {
+  type: [String],
+  default: []
+},
   content: String,
   type: { type: String, default: "normal" },
   emagPage: String,
   category: [String],
   status: { type: String, default: "draft" },
-  createdAt: { type: Date, default: Date.now }
+  createdAt: { type: Date, default: Date.now },
+  publishedAt: Date
 });
 
 const Post = mongoose.model("Post", PostSchema);
@@ -215,15 +219,19 @@ app.patch("/posts/:id/publish", requireAuth, async (req, res) => {
   try {
     const updated = await Post.findByIdAndUpdate(
       req.params.id,
-      { status: "published" },
+      {
+        status: "published",
+        publishedAt: new Date()
+      },
       { new: true }
     );
+
     res.json(updated);
   } catch (err) {
-    console.error("PATCH publish ERROR:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
+
 
 app.patch("/posts/:id/unpublish", requireAuth, async (req, res) => {
   try {
@@ -347,16 +355,22 @@ app.get("/public/category/:slug", async (req, res) => {
 // 4️⃣ SEARCH posts (title + sapo + tags)
 app.get("/public/search", async (req, res) => {
   try {
-    const q = req.query.q || "";
+    const q = (req.query.q || "").trim();
+    if (!q) return res.json([]);
+
+    const regex = new RegExp(q, "i");
 
     const posts = await Post.find({
       status: "published",
       $or: [
-        { title: { $regex: q, $options: "i" } },
-        { sapo: { $regex: q, $options: "i" } },
-        { tags: { $regex: q, $options: "i" } }
+        { title: regex },
+        { author: regex },
+        { tags: regex },
+        { sapo: regex }
       ]
-    });
+    })
+      .sort({ publishedAt: -1 }) 
+      .limit(20);               
 
     res.json(posts);
 
@@ -366,13 +380,16 @@ app.get("/public/search", async (req, res) => {
   }
 });
 
+
 // ============================
 // HOME API (Tiêu điểm + 5 chuyên mục lớn)
 // ============================
 
 app.get("/home", async (req, res) => {
   try {
-    const all = await Post.find({ status: "published" }).sort({ createdAt: -1 });
+    const all = await Post.find({ status: "published" })
+      .sort({ publishedAt: -1, createdAt: -1 });
+
 
     if (all.length === 0)
       return res.json({
@@ -385,8 +402,74 @@ app.get("/home", async (req, res) => {
         multimedia: []
       });
 
-    const highlight = all[0];
-    const recent = all.slice(1, 3);
+app.get("/home", async (req, res) => {
+  try {
+    // 1️⃣ Lấy bài vừa được duyệt gần nhất → TIÊU ĐIỂM
+    const highlight = await Post.findOne({ status: "published" })
+      .sort({ publishedAt: -1, createdAt: -1 });
+
+    // Nếu chưa có bài nào
+    if (!highlight) {
+      return res.json({
+        highlight: null,
+        recent: [],
+        tintuc: [],
+        trainghiem: [],
+        guongmat: [],
+        gochocthuat: [],
+        multimedia: []
+      });
+    }
+
+    // 2️⃣ Lấy 2 bài tiếp theo → danh sách tiêu điểm phụ
+    const recent = await Post.find({
+      status: "published",
+      _id: { $ne: highlight._id }
+    })
+      .sort({ publishedAt: -1, createdAt: -1 })
+      .limit(2);
+
+    // 3️⃣ Lấy toàn bộ bài published (cho các chuyên mục)
+    const all = await Post.find({ status: "published" })
+      .sort({ publishedAt: -1, createdAt: -1 });
+
+    const groups = {
+      tintuc: [],
+      trainghiem: [],
+      guongmat: [],
+      gochocthuat: [],
+      multimedia: []
+    };
+
+    all.forEach(post => {
+      if (!Array.isArray(post.category)) return;
+
+      post.category.forEach(cat => {
+        if (["tin-trong-nuoc", "tin-the-gioi"].includes(cat)) groups.tintuc.push(post);
+        if (["am-thuc", "diem-den", "ba-lo-du-lich", "di-chuyen-xanh"].includes(cat)) groups.trainghiem.push(post);
+        if (["nguoi-dan-xanh", "su-gia-van-hoa", "doanh-nghiep-xanh"].includes(cat)) groups.guongmat.push(post);
+        if (["cong-nghe-xanh", "tri-thuc-ben-vung", "du-lieu-chinh-sach"].includes(cat)) groups.gochocthuat.push(post);
+        if (["anh", "video", "infographic", "emagazine"].includes(cat)) groups.multimedia.push(post);
+      });
+    });
+
+    // 4️⃣ Trả dữ liệu về frontend
+    res.json({
+      highlight,
+      recent,
+      tintuc: groups.tintuc.slice(0, 4),
+      trainghiem: groups.trainghiem.slice(0, 4),
+      guongmat: groups.guongmat.slice(0, 4),
+      gochocthuat: groups.gochocthuat.slice(0, 4),
+      multimedia: groups.multimedia.slice(0, 4)
+    });
+
+  } catch (err) {
+    console.error("GET /home ERROR:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
 
     const groups = { tintuc: [], trainghiem: [], guongmat: [], gochocthuat: [], multimedia: [] };
 
