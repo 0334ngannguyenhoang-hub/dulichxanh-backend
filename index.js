@@ -387,28 +387,10 @@ app.get("/public/search", async (req, res) => {
 
 app.get("/home", async (req, res) => {
   try {
-    const all = await Post.find({ status: "published" })
-      .sort({ publishedAt: -1, createdAt: -1 });
-
-
-    if (all.length === 0)
-      return res.json({
-        highlight: null,
-        recent: [],
-        tintuc: [],
-        trainghiem: [],
-        guongmat: [],
-        gochocthuat: [],
-        multimedia: []
-      });
-
-app.get("/home", async (req, res) => {
-  try {
-    // 1️⃣ Lấy bài vừa được duyệt gần nhất → TIÊU ĐIỂM
+    // 1️⃣ BÀI TIÊU ĐIỂM = bài được duyệt mới nhất
     const highlight = await Post.findOne({ status: "published" })
       .sort({ publishedAt: -1, createdAt: -1 });
 
-    // Nếu chưa có bài nào
     if (!highlight) {
       return res.json({
         highlight: null,
@@ -421,7 +403,7 @@ app.get("/home", async (req, res) => {
       });
     }
 
-    // 2️⃣ Lấy 2 bài tiếp theo → danh sách tiêu điểm phụ
+    // 2️⃣ 2 bài tiếp theo (tiêu điểm phụ)
     const recent = await Post.find({
       status: "published",
       _id: { $ne: highlight._id }
@@ -429,10 +411,11 @@ app.get("/home", async (req, res) => {
       .sort({ publishedAt: -1, createdAt: -1 })
       .limit(2);
 
-    // 3️⃣ Lấy toàn bộ bài published (cho các chuyên mục)
+    // 3️⃣ TẤT CẢ BÀI ĐÃ XUẤT BẢN
     const all = await Post.find({ status: "published" })
       .sort({ publishedAt: -1, createdAt: -1 });
 
+    // 4️⃣ PHÂN NHÓM CHUYÊN MỤC
     const groups = {
       tintuc: [],
       trainghiem: [],
@@ -445,15 +428,24 @@ app.get("/home", async (req, res) => {
       if (!Array.isArray(post.category)) return;
 
       post.category.forEach(cat => {
-        if (["tin-trong-nuoc", "tin-the-gioi"].includes(cat)) groups.tintuc.push(post);
-        if (["am-thuc", "diem-den", "ba-lo-du-lich", "di-chuyen-xanh"].includes(cat)) groups.trainghiem.push(post);
-        if (["nguoi-dan-xanh", "su-gia-van-hoa", "doanh-nghiep-xanh"].includes(cat)) groups.guongmat.push(post);
-        if (["cong-nghe-xanh", "tri-thuc-ben-vung", "du-lieu-chinh-sach"].includes(cat)) groups.gochocthuat.push(post);
-        if (["anh", "video", "infographic", "emagazine"].includes(cat)) groups.multimedia.push(post);
+        if (["tin-trong-nuoc", "tin-the-gioi"].includes(cat))
+          groups.tintuc.push(post);
+
+        if (["am-thuc", "diem-den", "ba-lo-du-lich", "di-chuyen-xanh"].includes(cat))
+          groups.trainghiem.push(post);
+
+        if (["nguoi-dan-xanh", "su-gia-van-hoa", "doanh-nghiep-xanh"].includes(cat))
+          groups.guongmat.push(post);
+
+        if (["cong-nghe-xanh", "tri-thuc-ben-vung", "du-lieu-chinh-sach"].includes(cat))
+          groups.gochocthuat.push(post);
+
+        if (["anh", "video", "infographic", "emagazine"].includes(cat))
+          groups.multimedia.push(post);
       });
     });
 
-    // 4️⃣ Trả dữ liệu về frontend
+    // 5️⃣ TRẢ DATA CHO FRONTEND
     res.json({
       highlight,
       recent,
@@ -470,35 +462,6 @@ app.get("/home", async (req, res) => {
   }
 });
 
-
-    const groups = { tintuc: [], trainghiem: [], guongmat: [], gochocthuat: [], multimedia: [] };
-
-    all.forEach(post => {
-      if (!Array.isArray(post.category)) return;
-      post.category.forEach(cat => {
-        if (["tin-trong-nuoc", "tin-the-gioi"].includes(cat)) groups.tintuc.push(post);
-        if (["am-thuc", "diem-den", "ba-lo-du-lich", "di-chuyen-xanh"].includes(cat)) groups.trainghiem.push(post);
-        if (["nguoi-dan-xanh", "su-gia-van-hoa", "doanh-nghiep-xanh"].includes(cat)) groups.guongmat.push(post);
-        if (["cong-nghe-xanh", "tri-thuc-ben-vung", "du-lieu-chinh-sach"].includes(cat)) groups.gochocthuat.push(post);
-        if (["anh", "video", "infographic", "emagazine"].includes(cat)) groups.multimedia.push(post);
-      });
-    });
-
-    res.json({
-      highlight,
-      recent,
-      tintuc: groups.tintuc.slice(0, 4),
-      trainghiem: groups.trainghiem.slice(0, 4),
-      guongmat: groups.guongmat.slice(0, 4),
-      gochocthuat: groups.gochocthuat.slice(0, 4),
-      multimedia: groups.multimedia.slice(0, 4)
-    });
-
-  } catch (err) {
-    console.error("GET /home ERROR:", err);
-    res.status(500).json({ error: "Server error" });
-  }
-});
 
 // ============================
 // START SERVER
